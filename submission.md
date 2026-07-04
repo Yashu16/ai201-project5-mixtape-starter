@@ -34,3 +34,16 @@ Let's see how data flows when a user rates a song.
 - That rating.to_dict is returned by the route and then to the client gets a JSON body.  
 
 **pattern noticed** - Services raise ValueError for "expected" failures, and routes translate that into HTTP status codes. 
+
+**How I reproduced bugs**
+My three chosen bugs are:
+1. Listening streak keeps resetting (`streak_service.py`)
+2. Friends Listening Now shows people from yesterday (`feed_service.py`)
+5. The last song in a playlist never shows up (`playlist_service.py`) 
+
+**bug #1**: I have run the tests/test_streaks file and got four passed and one fail, which is test_streak_increments_on_sunday. Upon closer look, I understood that on sunday, the streak is supposed to be 2 but streak showed it as 1. This is a bug and I have reproduced it. The elif statement in streak_service only updates streak if it's not 6, which means as long as it's sunday, streak resets to 1.  
+
+**bug #2**: I have run tests/test_feed file and got one failed and one passed output. I have written a test that checks for last 24hours, which would mean yesterday around this time too. And it failed, proving bug reproducibility. And the test passed when time is today in calendar day, few hours before "now". 
+
+**bug #5**: I have run tests/test_playlists file and 2 functions failed and one has passed. The ones failed has tested for the length of songs, which is supposed to be 5 but it returns 4, because the last song doesn't return. Same issue with second function, only 4 tracks get returned. And last function returns empty, which works even if last song is excluded. 
+
