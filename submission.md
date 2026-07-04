@@ -24,3 +24,13 @@
 - get_streak - returns the streak after checking the user exists in db. 
 
 **Data flow**
+Let's see how data flows when a user rates a song. 
+- First the client sends an API POST request when they rate it. The API request will have user_id and score they give. 
+- Next, rate function from routes/songs gets called, which will parse JSON body from previous API into python dict, and will return 400 error if user_id or the score is missing. Otherwise, calls rate_song from notification_service file. 
+- The score gets converted from string to int.
+- rate_song function first checks if a score already exists in the database, and if it does, it overwrites them. 
+- rate_song function will call try/except ValueError - if try works, it returns the Rating object without triggering any notification, otherwise, returns a 400 response with error.
+- The Rating class in models.py file uses UniqueConstraint in the table to guarantee there's only one rating per song. It converts id, user_id, song_id, score and rated_at into a dictionary.
+- That rating.to_dict is returned by the route and then to the client gets a JSON body.  
+
+**pattern noticed** - Services raise ValueError for "expected" failures, and routes translate that into HTTP status codes. 
