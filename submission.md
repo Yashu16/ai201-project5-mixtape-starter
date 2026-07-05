@@ -19,7 +19,7 @@ So, here, AI wasn't able to help me figure out test cases for this bug, and I ch
 
 3. **playlist_service file**: There are Four functions in this file. 
 - First function - create_playlist - identifies if a user exists in db and then builds a new playlist (imported from models file), and by default it assumes collaboration with friends is true.
-- Second Function - get_playlist_songs - returns songs in the order they were added in a playlist. It first confirms the playlist exist, and queries playlist_entries table to get songs in order. However, it says [songs[:-1]] in return statement, which means the last song is never returned.
+- Second Function - get_playlist_songs - returns songs in the order they were added in a playlist. It first confirms the playlist exist, and queries playlist_entries table to get songs in order.
 - Third function - get_playlist - returns the metadata of the playlist without songs. 
 - Fourth function - get_user_playlists - returns all playlists created by an user.
 
