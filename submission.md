@@ -47,3 +47,24 @@ My three chosen bugs are:
 
 **bug #5**: I have run tests/test_playlists file and 2 functions failed and one has passed. The ones failed has tested for the length of songs, which is supposed to be 5 but it returns 4, because the last song doesn't return. Same issue with second function, only 4 tracks get returned. And last function returns empty, which works even if last song is excluded. 
 
+### Root Cause Analysis
+
+**Bug 1:**
+1. **Issue number and title:** Issue #1 — My listening streak keeps resetting.
+
+2. **How you reproduced it:** Before touching any code, I read the docstring of `update_listening_streak()` in `streak_service.py`, which states the rule: if a user listened yesterday, the streak increments by 1. I ran the existing test suite `tests/test_streaks.py -v` and got four passed, one failed. The failing test, `test_streak_increments_on_sunday`, simulates a user listening on a Saturday and then on the following Sunday — two genuinely consecutive days. The streak was expected to go from 1 to 2, but it reset to 1 instead:
+   ```
+   assert u.listening_streak == 2  # Should increment, not reset
+   AssertionError: assert 1 == 2
+   ```
+   This confirmed the bug exists, using a real failing test rather than just reading the code.
+
+3. **How you found the root cause:** I traced the call path from `record_listening_event()`, which calls `update_listening_streak(user, now)`. Reading that function line by line against its own docstring (new user → 1, same day → no change, listened yesterday → +1, gap of more than a day → reset to 1), I compared each `if`/`elif`/`else` branch to its corresponding rule. The moment of confidence came at:
+   ```python
+   elif days_since_last == 1 and today.weekday() != 6:
+   ```
+   The docstring's rule for this branch is simply "listened yesterday → increment." Nothing in the docstring mentions Sunday as a special case. That extra `and today.weekday() != 6` condition doesn't correspond to any stated rule, which is what told me this exact line — not just "somewhere in this function" — was the cause.
+
+4. **The root cause:** The condition for incrementing the streak requires two things to both be true: exactly one day has passed since the last listen, AND today is not a Sunday (`weekday() == 6`). Because of that second, undocumented condition, whenever a user's consecutive-day listen lands on a Sunday, the `elif` fails to match even though the day gap is correct, and execution falls through to the `else` branch, which resets `listening_streak` to 1 instead of incrementing it. In plain terms: the app silently breaks anyone's daily streak once a week, specifically on Sundays.
+
+5. **Your fix and side-effect check:** I removed the extra `and today.weekday() != 6` condition from the `elif`, leaving `elif days_since_last == 1:` so the increment now matches the docstring's actual rule — any consecutive day, including Sundays. Re-running `pytest tests/test_streaks.py -v` showed all 5 tests passing, including the previously-failing `test_streak_increments_on_sunday`. For a side-effect check, I searched the codebase for other callers of `update_listening_streak()`/`record_listening_event()` and found only `streak_service.py` itself, `routes/songs.py` (the `/listen` route), and `test_streaks.py` — no other service or test file touches streak logic, so `test_streaks.py` passing in full is a complete side-effect check for this change.
