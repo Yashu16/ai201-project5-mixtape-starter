@@ -86,3 +86,20 @@ My three chosen bugs are:
 
 5. **Your fix and side-effect check:** I changed how `cutoff` is computed in `get_friends_listening_now()`: instead of `cutoff = datetime.now(timezone.utc) - RECENT_THRESHOLD` (a rolling 24-hour window), it's now `cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)` — the start of the current calendar day in UTC. This makes "Friends Listening Now" correctly mean "since midnight today," matching how `streak_service.py` treats calendar days elsewhere in the codebase. Since `RECENT_THRESHOLD` was no longer used anywhere, I removed the constant entirely. Re-running `pytest tests/test_feed.py -v` showed both tests passing, including the previously-failing yesterday-leak case. For the side-effect check, I searched the codebase for other references to `get_friends_listening_now` and `RECENT_THRESHOLD` and found only `feed_service.py` itself, `routes/feed.py` (a thin pass-through with no logic depending on cutoff behavior), and `test_feed.py`. `get_activity_feed()` in the same file never used `RECENT_THRESHOLD` and is unaffected, since it has no recency filtering at all.
 
+
+**Bug 5:**
+
+1. **Issue number and title:** Issue #5 — The last song in a playlist never shows up.
+
+2. **How you reproduced it:** Before touching any code, I read `get_playlist_songs()` in `playlist_service.py`, whose docstring states it "returns all songs in the playlist" in order of position. I ran the existing test suite `pytest tests/test_playlists.py -v` and got two failures out of three tests: `test_playlist_returns_all_songs` (expects 5 songs in a playlist seeded with 5, but got 4) and `test_playlist_returns_songs_in_order` (expects titles `Track 1` through `Track 5`, but `Track 5` — the last one added — was missing). The third test, `test_empty_playlist_returns_empty_list`, passed, since an empty playlist trivially has no last song to drop.
+
+3. **How you found the root cause:** I read `get_playlist_songs()` line by line. It builds a query joining `Song` to `playlist_entries`, filters by `playlist_id`, and orders ascending by `position` — all of that logic is correct and matches the docstring. The final line, however, is:
+
+   ```python
+   return [song.to_dict() for song in songs[:-1]]
+   ```
+Comparing this against the docstring's claim of returning "all songs" was the moment of confidence: `songs[:-1]` is a Python slice that excludes the last element of the list. Since `songs` is already correctly ordered by position at that point, slicing off the last element always drops whichever song was most recently added to the playlist — regardless of how many songs are in it (as long as there's at least one).
+
+4. **The root cause:** The return statement slices the ordered songs list with `[:-1]`, which deliberately excludes the final item in the list. Since the list is sorted by `position` ascending, the excluded item is always the most recently added song. This means every playlist, no matter its size, is missing its last song whenever its contents are fetched — a plain off-by-one/incorrect-slice defect, not a query or ordering issue.
+
+5. **Your fix and side-effect check:** I changed the return statement from `[song.to_dict() for song in songs[:-1]]` to `[song.to_dict() for song in songs]`, removing the slice entirely since the full, already-correctly-ordered list should be returned with no exclusions. Re-running `pytest tests/test_playlists.py -v` showed all 3 tests passing, including the two that previously failed. For the side-effect check, I searched the codebase for other callers of `get_playlist_songs()` and found `routes/playlists.py` (a thin pass-through with no logic depending on the song count) and an unused import in `notification_service.py`'s `add_to_playlist()` — it imports `get_playlist_songs` but never actually calls it, so there's no behavioral dependency there either. `test_playlists.py` is the only test file exercising this function, and it's fully green.
