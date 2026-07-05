@@ -1,24 +1,33 @@
-**Notes**
-1. *feed_service file*: It has two functions. Both of them search for users and their friends. Returns Value_Error if user is not found, and returns [] if user has no friends. Also, imports user, song and Listening event from models file.
+### AI Usage Section
+
+**Instance 1**: I have asked AI to help me understand functions in each file. This was part of my initial note taking process, and there's nothing to override here, AI has helped me understand each function better. I have verified what it returned by going through the code and processing inputs to outputs flow by myself. 
+
+**Instance 2**: My initial plan was to solve bugs #1, #4, #5. However, I didn't have test cases for 4th bug - notification bug. So, I discussed with Claude to write one, and after looking at the cases, I have realized there's no passing case AI was able to generate. The case where when users add a song to the playlist would send a notification was not tested because AI was unable to generate a case for it. I have made some changes in the test case for it to work, however, in the end, I left it to solve later and chose bug #2. 
+So, here, AI wasn't able to help me figure out test cases for this bug, and I chose not to proceed with it for now. 
+
+### Notes (Codebase Map)
+1. **feed_service file**: It has two functions. Both of them search for users and their friends. Returns Value_Error if user is not found, and returns [] if user has no friends. Also, imports user, song and Listening event from models file.
 - First function identifies the music user's friends are listening right now and their recent ones, with a time limit of last 24hrs. And it only returns their most recent song. 
 - Second function identifies the music listened by the user's friends and returns all songs regardless of how old the date says they are, upto a certain limit.  
 
-2. *notification_service file*: This one has five functions. 
+2. **notification_service file**: This one has five functions. 
 - First one is basic create_notification, which adds and commits said notification to database. 
 - Next, it's add_to_playlist, it imports playlist from models file and those playlist songs from playlist_service file. Once it made sure the user, songs and playlist exist in the db, it adds the song to playlist if said song doesn't already exist. And, it notifies the user who shared the song, however, if the user themselves adds it, they don't get a notification. 
-- Third one is rate_song, which first checks if score is 1-5, and if said user and song exist in db. If the user has already rated the song before, it will overwrite it in db. Otherwise, the song gets a rating. Then returns the rating without triggering any notification. This is a **bug**.
+- Third one is rate_song, which first checks if score is 1-5, and if said user and song exist in db. If the user has already rated the song before, it will overwrite it in db. Otherwise, the song gets a rating. Then returns the rating.
 - Fourth one is get_notification, which fetches a user's notification list. But if user only want unread ones, it returns only them based on said parameter value being true. It returns these notification in the order from most recent to old. 
 - Last is mark_as_read, which dismisses a notification if user marks it as true. It does by looking at notification ID, and flipping read flag to True, and saves it in db. If there's no notification, it returns ValueError. 
 
-3. *playlist_service file*: There are Four functions in this file. 
+3. **playlist_service file**: There are Four functions in this file. 
 - First function - create_playlist - identifies if a user exists in db and then builds a new playlist (imported from models file), and by default it assumes collaboration with friends is true.
-- Second Function - get_playlist_songs - returns songs in the order they were added in a playlist. It first confirms the playlist exist, and queries playlist_entries table to get songs in order. However, it says [songs[:-1]] in return statement, which means the last song is never returned. This is a **bug**. 
+- Second Function - get_playlist_songs - returns songs in the order they were added in a playlist. It first confirms the playlist exist, and queries playlist_entries table to get songs in order. However, it says [songs[:-1]] in return statement, which means the last song is never returned.
 - Third function - get_playlist - returns the metadata of the playlist without songs. 
 - Fourth function - get_user_playlists - returns all playlists created by an user.
-4. *search_service file*: This one has two functions. 
+
+4. **search_service file**: This one has two functions. 
 - search_songs - it finds songs by title or artist. 
 - get_song - fetches one song by ID. If said song is not in db, it returns ValueError. 
-5. *streak_service file*: It has three functions. 
+
+5. **streak_service file**: It has three functions. 
 - record_listening_event - once it confirms the user exist in db, it creates a new listening event row with current timestamp. calls it's second function to update streak. 
 - update_listening_streak - updates streak based on certain rules given in docstring. 
 - get_streak - returns the streak after checking the user exists in db. 
@@ -103,3 +112,5 @@ Comparing this against the docstring's claim of returning "all songs" was the mo
 4. **The root cause:** The return statement slices the ordered songs list with `[:-1]`, which deliberately excludes the final item in the list. Since the list is sorted by `position` ascending, the excluded item is always the most recently added song. This means every playlist, no matter its size, is missing its last song whenever its contents are fetched — a plain off-by-one/incorrect-slice defect, not a query or ordering issue.
 
 5. **Your fix and side-effect check:** I changed the return statement from `[song.to_dict() for song in songs[:-1]]` to `[song.to_dict() for song in songs]`, removing the slice entirely since the full, already-correctly-ordered list should be returned with no exclusions. Re-running `pytest tests/test_playlists.py -v` showed all 3 tests passing, including the two that previously failed. For the side-effect check, I searched the codebase for other callers of `get_playlist_songs()` and found `routes/playlists.py` (a thin pass-through with no logic depending on the song count) and an unused import in `notification_service.py`'s `add_to_playlist()` — it imports `get_playlist_songs` but never actually calls it, so there's no behavioral dependency there either. `test_playlists.py` is the only test file exercising this function, and it's fully green.
+
+screenshot: ![Screenshot showing 3 commits for each bug](image.png)
