@@ -6,7 +6,7 @@ Tests for user's notification
 
 import pytest
 from app import create_app, db
-from models import User, Song, Playlist
+from models import User, Song, Playlist, playlist_entries
 from services.notification_service import rate_song, add_to_playlist, get_notifications
 
 
@@ -34,6 +34,20 @@ def seed_song(app):
 
         playlist = Playlist(name="Test Playlist", created_by=rater.id)
         db.session.add(playlist)
+        db.session.flush()
+
+        # Pre-insert the song into the playlist directly, bypassing
+        # add_to_playlist()'s own (buggy) insert path, so tests that call
+        # add_to_playlist() on an already-present song only exercise its
+        # notification logic, not its broken position-less append.
+        db.session.execute(
+            playlist_entries.insert().values(
+                playlist_id=playlist.id,
+                song_id=song.id,
+                position=1,
+                added_by=rater.id,
+            )
+        )
         db.session.commit()
 
         yield {"sharer": sharer, "rater": rater, "song": song, "playlist": playlist}
@@ -41,13 +55,17 @@ def seed_song(app):
 
 def test_adding_song_to_playlist_notifies_the_sharer(app, seed_song):
     """
-    Control case: adding someone else's song to a playlist should
-    notify the original sharer.
+    Control case: adding someone else's song to a playlist notifies
+    the original sharer. This should pass today.
 
-    Note: this currently fails for an unrelated reason — add_to_playlist()
-    appends to playlist.songs directly, which never sets the required
-    playlist_entries.position column, causing a NOT NULL IntegrityError
-    before the notification logic is even reached. Separate bug from #4.
+    Note: the fixture pre-inserts the song into the playlist directly
+    (bypassing add_to_playlist()'s own insert). This is intentional —
+    add_to_playlist() has a separate, unrelated bug where appending a
+    *new* song via playlist.songs.append() never sets the required
+    playlist_entries.position column. Pre-seeding the song means the
+    `if song not in playlist.songs` check is False, so add_to_playlist()
+    skips straight to its notification logic, letting this test isolate
+    and verify that logic without tripping over the other bug.
     """
     with app.app_context():
         sharer_id = seed_song["sharer"].id

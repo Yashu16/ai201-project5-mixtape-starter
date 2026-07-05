@@ -95,6 +95,40 @@ My three chosen bugs are:
 
 5. **Your fix and side-effect check:** I changed how `cutoff` is computed in `get_friends_listening_now()`: instead of `cutoff = datetime.now(timezone.utc) - RECENT_THRESHOLD` (a rolling 24-hour window), it's now `cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)` — the start of the current calendar day in UTC. This makes "Friends Listening Now" correctly mean "since midnight today," matching how `streak_service.py` treats calendar days elsewhere in the codebase. Since `RECENT_THRESHOLD` was no longer used anywhere, I removed the constant entirely. Re-running `pytest tests/test_feed.py -v` showed both tests passing, including the previously-failing yesterday-leak case. For the side-effect check, I searched the codebase for other references to `get_friends_listening_now` and `RECENT_THRESHOLD` and found only `feed_service.py` itself, `routes/feed.py` (a thin pass-through with no logic depending on cutoff behavior), and `test_feed.py`. `get_activity_feed()` in the same file never used `RECENT_THRESHOLD` and is unaffected, since it has no recency filtering at all.
 
+**Bug 4:**
+
+1. **Issue number and title:** Issue #4 — I got notified when a friend added my song to a playlist but not when they rated it.
+
+2. **How you reproduced it:** I created `tests/test_notifications.py` with a shared fixture (`seed_song`) setting up a sharer who owns a song and a separate rater. I wrote two tests: `test_adding_song_to_playlist_notifies_the_sharer` (the "control" case, mirroring the working behavior described in the bug report) and `test_rating_a_song_notifies_the_sharer` (the case reported as broken). Both call `get_notifications(sharer_id)` before and after the action, expecting the count to go from 0 to 1.
+
+   My first attempt at the control test called `add_to_playlist()` directly and failed with `sqlite3.IntegrityError: NOT NULL constraint failed: playlist_entries.position` — an unrelated bug where `add_to_playlist()`'s `playlist.songs.append(song)` line never sets the required `position` column when adding a *new* song to a playlist. Per feedback, I decoupled my test setup from this adjacent broken code: since `add_to_playlist()` only runs that broken append when `song not in playlist.songs`, I updated the `seed_song` fixture to pre-insert the song into `playlist_entries` directly (the same way `test_playlists.py`'s fixture does), bypassing the broken path so the control test could isolate and verify the notification logic specifically.
+
+   With that fix, `pytest tests/test_notifications.py -v` gave a clean, side-by-side result: the control test **passed** (proving the notify-on-playlist-add pattern works), and the rating test **failed**:
+   ```
+   assert len(notifications_after) == 1  # Bug: rate_song never notifies the sharer
+   AssertionError: assert 0 == 1
+   ```
+   This is strong evidence: identical setup, identical assertion, only the triggering action differs — and only rating produces zero notifications.
+
+3. **How you found the root cause:** I compared `add_to_playlist()` and `rate_song()` in `notification_service.py` line by line, since the bug report itself frames this as "works for one action, not the other." `add_to_playlist()` ends with a guard and a call:
+   ```python
+   if song.shared_by != added_by_user_id:
+       create_notification(...)
+   ```
+   `rate_song()` has no equivalent block anywhere — it validates the score, looks up the song and user, creates or updates the `Rating`, commits, and returns. There is no call to `create_notification` at all in the function. Confirming this wasn't a naming mismatch or exception being swallowed, I checked the whole file for any other call site of `create_notification` and found only the one in `add_to_playlist()`.
+
+4. **The root cause:** `rate_song()` never calls `create_notification()`. Unlike `add_to_playlist()`, which notifies the song's original sharer after a successful playlist add (skipping the notification only if the sharer is the one who added it), `rate_song()` has no corresponding step at all — rating a song updates the `Rating` table and returns, with no side effect informing the sharer that their song was rated.
+
+5. **Your fix and side-effect check:** I added a guard and notification call to `rate_song()`, placed after `db.session.commit()` and before the `return`, mirroring `add_to_playlist()`'s pattern exactly:
+   ```python
+   if song.shared_by != user_id:
+       create_notification(
+           user_id=song.shared_by,
+           notification_type="song_rated",
+           body=f"{rater.username} rated your song '{song.title}'.",
+       )
+   ```
+   The guard skips the notification when the sharer rates their own song, same as the playlist case skips notifying someone about their own action. Re-running `pytest tests/test_notifications.py -v` showed both tests passing — the control case (playlist-add) and the previously-failing rating case. For the side-effect check, I searched the codebase for other callers of `rate_song()` and found only `routes/songs.py` (a thin pass-through with no logic depending on whether a notification fires) — no other test file touches `rate_song` or `create_notification`. I also reasoned through the "rate the same song twice" path (lines 101-103, which updates an existing `Rating` instead of creating a new one): since the notification block runs unconditionally after the commit regardless of whether the rating was created or updated, re-rating a song still correctly notifies the sharer each time.
 
 **Bug 5:**
 
